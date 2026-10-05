@@ -1,0 +1,33 @@
+# Normalise line endings.
+#
+# The repository stores LF. Without this, Git for Windows checks files out with
+# CRLF, so a contributor on Windows and one on Linux see every line as modified
+# even when nothing changed, and CI diffs become unreadable.
+#
+# `text=auto` lets Git detect text files and store them with LF, while
+# `eol=lf` forces LF in the working tree as well. This project is developed on
+# Windows and tested on Linux and macOS, so a single convention is worth having.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF if they are ever executed by cmd.exe or by
+# a PowerShell version that is strict about line endings. These are the only
+# exceptions; everything else stays LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets: never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.docx binary
+*.xlsx binary
+*.pdf binary
+*.db binary
+*.pyc binary
+
+# Keep generated artifacts out of language statistics (they are git-ignored, but
+# this also stops `git diff --stat` noise if they are ever force-added).
+data/applications.jsonl -diff
+reports/*.json -diff

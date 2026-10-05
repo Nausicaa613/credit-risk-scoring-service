@@ -1,0 +1,40 @@
+services:
+  riskscore:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: credit-risk-scoring-service:0.1.0
+    container_name: riskscore
+    ports:
+      - "8080:8080"
+    environment:
+      RISKSCORE_HOST: "0.0.0.0"
+      RISKSCORE_PORT: "8080"
+      RISKSCORE_DB_PATH: "/app/data/riskscore.db"
+      RISKSCORE_MODEL_PATH: "/app/models/model.json"
+      RISKSCORE_DECISION_THRESHOLD: "0.35"
+      RISKSCORE_LOG_LEVEL: "INFO"
+    volumes:
+      # The model artifact is produced on the host by `make train` and mounted
+      # read-only: the container must not be able to rewrite a live model.
+      - ./models:/app/models:ro
+      # The SQLite database needs a writable volume so decisions survive a
+      # container restart, which is the whole point of persisting them.
+      - riskscore-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, sys, urllib.request
+          r = json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4))
+          sys.exit(0 if r.get('status') == 'ok' else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  riskscore-data:

@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "credit-risk-scoring-service"
+version = "0.1.0"
+description = "A dependency-free credit risk scoring microservice: an explainable logistic scorecard served over a REST API."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Nausicaa613" }]
+keywords = ["credit-risk", "scorecard", "logistic-regression", "explainable-ai", "fintech", "python", "rest-api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Intentionally empty. The runtime is pure standard library, which is the
+# headline design decision of this project: it installs and runs anywhere Python
+# does, and there is no dependency surface to audit or patch.
+dependencies = []
+
+[project.optional-dependencies]
+# Development conveniences only. The test suite itself is unittest-based, so even
+# these are optional; `python -m unittest` works on a bare interpreter.
+dev = [
+    "pytest>=7.0; python_version >= '3.9'",
+    "coverage>=7.0",
+]
+
+[project.scripts]
+riskscore-serve = "riskscore.server:main"
+
+[project.urls]
+Documentation = "https://github.com/Nausicaa613/credit-risk-scoring-service/blob/main/docs/DESIGN.md"
+Source = "https://github.com/Nausicaa613/credit-risk-scoring-service"
+"Model card" = "https://github.com/Nausicaa613/credit-risk-scoring-service/blob/main/MODEL_CARD.md"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["riskscore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["riskscore"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

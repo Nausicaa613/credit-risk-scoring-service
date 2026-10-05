@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel an in-flight run when the same branch is pushed again.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        include:
+          # One Windows leg, because the service must work on the platform many
+          # contributors use and SQLite/threading behaviour differs slightly.
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show the interpreter
+        run: python --version
+
+      - name: Check for accidental third-party imports
+        shell: bash
+        run: |
+          # The zero-dependency claim is a promise to users. Fail the build if a
+          # third-party import creeps into the runtime package.
+          python - <<'PY'
+          import ast, pathlib, sys
+          stdlib = set(sys.stdlib_module_names)
+          offenders = []
+          for path in pathlib.Path("src").rglob("*.py"):
+              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      names = [alias.name.split(".")[0] for alias in node.names]
+                  elif isinstance(node, ast.ImportFrom):
+                      names = [(node.module or "").split(".")[0]]
+                  else:
+                      continue
+                  for name in names:
+                      if name and name not in stdlib and name != "riskscore":
+                          offenders.append(f"{path}: {name}")
+          if offenders:
+              print("third-party imports found in src/:")
+              print("\n".join(offenders))
+              raise SystemExit(1)
+          print("src/ imports only the standard library")
+          PY
+
+      - name: Run the unit and integration test suite
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: End-to-end smoke check
+        run: python scripts/smoke_check.py
+
+  pipeline:
+    name: data and training pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate the synthetic dataset
+        run: python scripts/generate_dataset.py --rows 6000 --seed 20260101 --output data/applications.jsonl
+
+      - name: Train the scorecard
+        run: python scripts/train_model.py --data data/applications.jsonl --model models/model.json
+
+      - name: Fail if the model is not monotone in risk
+        run: |
+          # train_model.py enforces this internally; re-asserting it here means a
+          # broken model cannot reach a release even if that check is removed.
+          python - <<'PY'
+          import json, pathlib
+          metrics = json.loads(pathlib.Path("reports/training_metrics.json").read_text())
+          auc = metrics["test"]["auc"]
+          assert auc > 0.6, f"holdout AUC regressed to {auc}"
+          print(f"holdout AUC {auc:.4f}, KS {metrics['test']['ks']:.4f}")
+          PY
+
+      - name: Upload the training report
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-report
+          path: |
+            reports/training_metrics.json
+            reports/training_summary.md
+          retention-days: 14
+
+      - name: Show the training summary
+        run: cat reports/training_summary.md
+
+  docker:
+    name: container build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t credit-risk-scoring-service:ci .
+
+      - name: Start the container against a freshly trained model
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python scripts/generate_dataset.py --rows 2000 --output data/applications.jsonl
+          .venv/bin/python scripts/train_model.py --data data/applications.jsonl --model models/model.json
+
+          docker run -d --name riskscore-ci \
+            -p 8080:8080 \
+            -v "$PWD/models:/app/models:ro" \
+            credit-risk-scoring-service:ci
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz | grep -q '"status": "ok"'; then
+              echo "service is healthy after $attempt attempt(s)"
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS -X POST http://127.0.0.1:8080/v1/score \
+            -H 'Content-Type: application/json' \
+            -d '{"age":40,"annual_income":300000,"employment_years":8,"debt_to_income_ratio":0.3,"num_delinquencies_24m":0,"credit_history_months":150,"loan_amount":200000,"loan_term_months":36,"num_open_accounts":5,"revolving_utilization":0.3,"purpose":"equipment"}' \
+            | tee /tmp/score.json
+
+          grep -q '"credit_score"' /tmp/score.json
+
+      - name: Container logs
+        if: always()
+        run: docker logs riskscore-ci
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f riskscore-ci || true

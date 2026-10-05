@@ -1,0 +1,54 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging and environments
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.Python
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# Generated project artefacts.
+# These are reproducible: `make data` uses a fixed seed and `make train` is
+# deterministic, so anyone can recreate them byte for byte. Committing them would
+# add megabytes and hide regeneration bugs.
+data/
+models/
+reports/
+
+# Local database files, in case someone points RISKSCORE_DB_PATH at the root
+*.db
+*.db-wal
+*.db-shm
+
+# Editors and OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Local environment overrides
+.env
+.env.local
