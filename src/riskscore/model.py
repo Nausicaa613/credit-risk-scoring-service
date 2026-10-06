@@ -459,7 +459,17 @@ class ScorecardModel:
         )
 
     def save(self, path: str) -> None:
-        """Atomically write the artifact so a crash cannot truncate a live model."""
+        """Atomically write the artifact so a crash cannot truncate a live model.
+
+        The write goes to a temporary file which is then renamed, and the result is
+        explicitly widened to world-readable. That second step is load-bearing:
+        ``tempfile`` creates files with mode ``0600`` and the rename preserves it,
+        so a model trained by one user is unreadable by anyone else. The documented
+        container workflow trains on the host and bind-mounts the artifact
+        read-only into an image that runs as a non-root UID, which then fails with
+        ``PermissionError: '/app/models/model.json'``. A model artifact is not a
+        secret; it is a few kilobytes of weights destined for a read-only mount.
+        """
         directory = os.path.dirname(os.path.abspath(path))
         os.makedirs(directory, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(dir=directory, suffix=".tmp")
@@ -467,6 +477,13 @@ class ScorecardModel:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(self.to_dict(), handle, indent=2, sort_keys=True)
                 handle.write("\n")
+            # mkstemp hands back 0600; widen it before the file becomes visible
+            # under its real name. No-op semantics on Windows, where the mode is
+            # not the access-control mechanism.
+            try:
+                os.chmod(temporary, 0o644)
+            except OSError:  # pragma: no cover - platform dependent
+                pass
             os.replace(temporary, path)
         except BaseException:
             if os.path.exists(temporary):

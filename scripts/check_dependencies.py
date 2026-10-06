@@ -22,6 +22,31 @@ import sys
 from pathlib import Path
 from typing import List, Sequence, Set, Tuple
 
+#: Packages that are unambiguously not part of the standard library, used as the
+#: fallback check on interpreters without ``sys.stdlib_module_names`` (below
+#: Python 3.10).
+#:
+#: Why a denylist rather than a stdlib list: the previous fallback collected
+#: ``sys.modules``, which by the time this script runs contains the interpreter's
+#: own startup imports *and* anything installed in site-packages. On a GitHub
+#: Actions runner that made ``ast`` and ``pathlib`` look like third-party
+#: packages, so the check failed on Python 3.9 while passing everywhere else. An
+#: allowlist copied from CPython 3.9 would be long and would rot silently; a
+#: denylist of realistic dependencies is short, obviously correct, and cannot
+#: produce false positives. The precise check still runs on every modern
+#: interpreter.
+KNOWN_THIRD_PARTY: Tuple[str, ...] = (
+    "attr", "attrs", "azure", "bcrypt", "beautifulsoup4", "bs4", "boto3", "botocore",
+    "celery", "click", "coverage", "cv2", "dateutil", "django", "docx", "environs",
+    "fastapi", "flask", "gensim", "google", "grpc", "httpx", "jinja2", "joblib",
+    "jwt", "keras", "lightgbm", "lxml", "matplotlib", "mypy", "mysql", "nltk",
+    "numpy", "openai", "openpyxl", "pandas", "passlib", "pillow", "PIL", "plotly",
+    "psycopg2", "pydantic", "pyodbc", "pytest", "pytz", "redis", "requests",
+    "scipy", "seaborn", "selenium", "setuptools", "sklearn", "sqlalchemy", "starlette",
+    "statsmodels", "tensorflow", "torch", "tqdm", "transformers", "typing_extensions",
+    "uvicorn", "xgboost", "yaml",
+)
+
 
 def local_module_names(package_dir: Path) -> Set[str]:
     """Top-level module names that belong to this project, not to PyPI."""
@@ -52,16 +77,22 @@ def imported_top_level_modules(tree: ast.AST) -> List[Tuple[str, int]]:
     return found
 
 
-def check(package_dir: Path, *, allow: Sequence[str] = ()) -> List[str]:
-    """Return a list of human-readable violations (empty means clean)."""
-    stdlib = set(getattr(sys, "stdlib_module_names", ()))
-    if not stdlib:
-        # Python < 3.10 has no stdlib_module_names. Fall back to the documented
-        # module list rather than silently passing.
-        stdlib = set(sys.builtin_module_names) | {
-            name for name in sys.modules if not name.startswith("_")
-        }
-    allowed = set(allow) | local_module_names(package_dir) | stdlib
+def check(package_dir: Path, *, allow: Sequence[str] = ()) -> Tuple[List[str], str]:
+    """Return ``(violations, mode)`` where mode describes how the check was done."""
+    stdlib = getattr(sys, "stdlib_module_names", None)
+    if stdlib:
+        mode = f"stdlib_module_names (Python {sys.version_info.major}.{sys.version_info.minor})"
+        allowed: Set[str] = set(stdlib)
+    else:
+        mode = (
+            f"known-third-party denylist (Python "
+            f"{sys.version_info.major}.{sys.version_info.minor} has no sys.stdlib_module_names)"
+        )
+        allowed = set()
+
+    known_third_party = set(KNOWN_THIRD_PARTY)
+    project_modules = local_module_names(package_dir)
+    explicitly_allowed = set(allow) | project_modules
 
     violations: List[str] = []
     for path in sorted(package_dir.rglob("*.py")):
@@ -71,13 +102,20 @@ def check(package_dir: Path, *, allow: Sequence[str] = ()) -> List[str]:
             violations.append(f"{path}: cannot parse ({exc})")
             continue
         for module, lineno in imported_top_level_modules(tree):
-            if module not in allowed:
+            if module in explicitly_allowed:
+                continue
+            if stdlib:
+                if module not in allowed:
+                    violations.append(f"{path}:{lineno}: third-party import {module!r}")
+            elif module in known_third_party:
                 violations.append(f"{path}:{lineno}: third-party import {module!r}")
-    return violations
+    return violations, mode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--package-dir", default="src", help="directory holding the runtime package")
     parser.add_argument("--allow", action="append", default=[], help="extra module to permit (repeatable)")
     args = parser.parse_args(argv)
@@ -87,7 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {package_dir} is not a directory", file=sys.stderr)
         return 2
 
-    violations = check(package_dir, allow=args.allow)
+    violations, mode = check(package_dir, allow=args.allow)
     if violations:
         print("third-party imports found in the runtime package:", file=sys.stderr)
         for violation in violations:
@@ -102,6 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     total = sum(1 for _ in package_dir.rglob("*.py"))
     print(f"{package_dir}/ imports only the standard library ({total} modules checked)")
+    print(f"check mode: {mode}")
     return 0
 
 

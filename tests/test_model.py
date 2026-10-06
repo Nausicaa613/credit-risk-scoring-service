@@ -379,6 +379,52 @@ class PersistenceTests(unittest.TestCase):
         leftovers = [name for name in os.listdir(os.path.dirname(self.path)) if name.endswith(".tmp")]
         self.assertEqual(leftovers, [])
 
+    def test_saved_artifact_is_world_readable(self) -> None:
+        """The artifact must be readable by a different user.
+
+        ``tempfile.mkstemp`` creates the staging file with mode 0600 and the rename
+        preserves it, so without an explicit chmod a model trained by one account is
+        unreadable by anyone else. That is not hypothetical: the container job in CI
+        trains on the host and bind-mounts the artifact into an image running as a
+        non-root UID, which failed with PermissionError until this was fixed.
+
+        The umask is tightened around the save so the test catches a regression even
+        on a machine whose default umask is already permissive.
+        """
+        import stat
+
+        previous_umask = os.umask(0o077)
+        try:
+            self.model.save(self.path)
+        finally:
+            os.umask(previous_umask)
+
+        mode = stat.S_IMODE(os.stat(self.path).st_mode)
+        self.assertTrue(
+            mode & stat.S_IROTH,
+            f"artifact mode {oct(mode)} is not world-readable; a non-root mount cannot read it",
+        )
+
+    def test_failed_save_leaves_the_previous_artifact_intact(self) -> None:
+        """A serialisation failure must not destroy a good model on disk."""
+        import json as json_module
+
+        self.model.save(self.path)
+        failing = ScorecardModel.from_dict(self.model.to_dict())
+
+        original_dump = json_module.dump
+        try:
+            json_module.dump = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+            with self.assertRaises(RuntimeError):
+                failing.save(self.path)
+        finally:
+            json_module.dump = original_dump
+
+        reloaded = ScorecardModel.load(self.path)
+        self.assertEqual(reloaded.weights, self.model.weights)
+        leftovers = [name for name in os.listdir(os.path.dirname(self.path)) if name.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
