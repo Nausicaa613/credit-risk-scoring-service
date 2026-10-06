@@ -43,32 +43,7 @@ jobs:
         run: python --version
 
       - name: Check for accidental third-party imports
-        shell: bash
-        run: |
-          # The zero-dependency claim is a promise to users. Fail the build if a
-          # third-party import creeps into the runtime package.
-          python - <<'PY'
-          import ast, pathlib, sys
-          stdlib = set(sys.stdlib_module_names)
-          offenders = []
-          for path in pathlib.Path("src").rglob("*.py"):
-              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-              for node in ast.walk(tree):
-                  if isinstance(node, ast.Import):
-                      names = [alias.name.split(".")[0] for alias in node.names]
-                  elif isinstance(node, ast.ImportFrom):
-                      names = [(node.module or "").split(".")[0]]
-                  else:
-                      continue
-                  for name in names:
-                      if name and name not in stdlib and name != "riskscore":
-                          offenders.append(f"{path}: {name}")
-          if offenders:
-              print("third-party imports found in src/:")
-              print("\n".join(offenders))
-              raise SystemExit(1)
-          print("src/ imports only the standard library")
-          PY
+        run: python scripts/check_dependencies.py
 
       - name: Run the unit and integration test suite
         run: python -m unittest discover -s tests -t . -v
@@ -86,7 +61,7 @@ jobs:
           python-version: "3.12"
 
       - name: Generate the synthetic dataset
-        run: python scripts/generate_dataset.py --rows 6000 --seed 20260101 --output data/applications.jsonl
+        run: python scripts/generate_dataset.py --rows 6000 --seed 20260101 --base-rate 0.18 --output data/applications.jsonl
 
       - name: Train the scorecard
         run: python scripts/train_model.py --data data/applications.jsonl --model models/model.json
@@ -126,22 +101,35 @@ jobs:
 
       - name: Start the container against a freshly trained model
         run: |
+          # Use the documented targets rather than calling the scripts directly:
+          # `make data` also creates the data/, models/ and reports/ directories,
+          # which do not exist in a fresh checkout because they are git-ignored.
           python3 -m venv .venv
-          .venv/bin/python scripts/generate_dataset.py --rows 2000 --output data/applications.jsonl
-          .venv/bin/python scripts/train_model.py --data data/applications.jsonl --model models/model.json
+          make PYTHON=.venv/bin/python data
+          make PYTHON=.venv/bin/python train
 
           docker run -d --name riskscore-ci \
             -p 8080:8080 \
             -v "$PWD/models:/app/models:ro" \
             credit-risk-scoring-service:ci
 
-          for attempt in $(seq 1 30); do
+          healthy=0
+          for attempt in $(seq 1 40); do
             if curl -fsS http://127.0.0.1:8080/healthz | grep -q '"status": "ok"'; then
               echo "service is healthy after $attempt attempt(s)"
+              healthy=1
               break
             fi
             sleep 1
           done
+
+          if [ "$healthy" -ne 1 ]; then
+            echo "::error::service never reported status=ok within 40s"
+            curl -sS http://127.0.0.1:8080/healthz || true
+            echo "--- container logs ---"
+            docker logs riskscore-ci || true
+            exit 1
+          fi
 
           curl -fsS -X POST http://127.0.0.1:8080/v1/score \
             -H 'Content-Type: application/json' \
@@ -149,7 +137,7 @@ jobs:
             | tee /tmp/score.json
 
           grep -q '"credit_score"' /tmp/score.json
-
+          echo "container scored an application successfully"
       - name: Container logs
         if: always()
         run: docker logs riskscore-ci
