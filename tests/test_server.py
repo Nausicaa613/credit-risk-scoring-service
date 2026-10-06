@@ -16,6 +16,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 
 from riskscore.config import Settings
 from riskscore.features import FEATURE_NAMES
@@ -118,6 +119,32 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+def bind_on_free_port(service, settings, *, attempts: int = 10):
+    """Bind ``service`` on an ephemeral port, retrying if the port is taken.
+
+    ``free_port()`` can only report a port that *was* free: the probe socket is
+    closed before the real server binds, and in that window the OS may hand the
+    same port to anything else on the machine. The result is a rare ``OSError``
+    ("address already in use") raised from ``setUp``, which surfaces as an
+    *error* rather than a failure -- exactly the kind of flake that erodes trust
+    in a green suite. Retrying with a fresh port closes the window without
+    touching production code.
+
+    ``settings.port`` only ever reaches the bind call (nothing else in the
+    service reads it), so returning the settings that actually bound is safe.
+
+    Returns ``(server, settings)``.
+    """
+    last_error = None
+    for _ in range(attempts):
+        candidate = replace(settings, port=free_port())
+        try:
+            return build_server(service, candidate), candidate
+        except OSError as error:
+            last_error = error
+    raise last_error
+
+
 class ServerTestCase(unittest.TestCase):
     max_body_bytes = 64 * 1024
 
@@ -125,14 +152,14 @@ class ServerTestCase(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.settings = Settings(
             host="127.0.0.1",
-            port=free_port(),
+            port=0,
             db_path=os.path.join(self.directory.name, "http.db"),
             model_path=os.path.join(self.directory.name, "model.json"),
             max_body_bytes=self.max_body_bytes,
         )
         self.service = build_service(self.settings)
         self.service.load_model(build_model())
-        self.server = build_server(self.service, self.settings)
+        self.server, self.settings = bind_on_free_port(self.service, self.settings)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05})
         self.thread.daemon = True
         self.thread.start()
@@ -245,9 +272,15 @@ class HttpScoringTests(ServerTestCase):
     def test_oversized_body_returns_413(self) -> None:
         huge = json.dumps(valid_payload()).encode("utf-8")
         huge = huge + b" " * (self.max_body_bytes + 100)
-        status, _, payload = self.json_response("POST", "/v1/score", body=huge)
+        status, headers, payload = self.json_response("POST", "/v1/score", body=huge)
         self.assertEqual(status, 413)
         self.assertEqual(payload["error"]["code"], "payload_too_large")
+        # The body is still in flight when the request is refused. This header
+        # is the client-visible half of the fix: it stops the connection from
+        # being reused with the unread body parsed as the next request line, and
+        # the server drains what is already buffered so the close is a clean FIN
+        # rather than an RST that would discard this very response.
+        self.assertEqual(headers.get("Connection"), "close")
 
     def test_missing_application_returns_404(self) -> None:
         status, _, payload = self.json_response("GET", "/v1/applications/app_missing99999")
@@ -332,14 +365,14 @@ class ServerConstructionTests(unittest.TestCase):
         try:
             settings = Settings(
                 host="127.0.0.1",
-                port=free_port(),
+                port=0,
                 db_path=os.path.join(directory.name, "x.db"),
             )
             service = build_service(settings)
-            server = build_server(service, settings)
+            server, bound = bind_on_free_port(service, settings)
             try:
                 self.assertIsInstance(server, RiskScoreHTTPServer)
-                self.assertEqual(server.server_address[1], settings.port)
+                self.assertEqual(server.server_address[1], bound.port)
                 self.assertIs(server.service, service)
             finally:
                 server.server_close()
@@ -366,11 +399,11 @@ class ServerConstructionTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         settings = Settings(
             host="127.0.0.1",
-            port=free_port(),
+            port=0,
             db_path=os.path.join(directory.name, "z.db"),
         )
         service = build_service(settings)
-        server = build_server(service, settings)
+        server, settings = bind_on_free_port(service, settings)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.daemon = True
         thread.start()

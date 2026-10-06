@@ -52,7 +52,7 @@ scripts/train_model.py      --> models/model.json  (WoE bins, coefficients, inte
 
 ### 3.1 Request lifecycle: `POST /v1/score`
 
-1. **Accept.** `server.py` accepts on a `ThreadingHTTPServer` and reads `Content-Length`; a body larger than `MAX_BODY_BYTES` is rejected with 413 before buffering.
+1. **Accept.** `server.py` accepts on a `ThreadingHTTPServer` and checks `Content-Length` before reading: a body larger than `MAX_BODY_BYTES` is refused with 413 without being buffered. Because the client is normally still sending, that request — and every other one refused before its body is read — is answered with `Connection: close` and then drained under a byte and time bound, so the socket ends with FIN rather than RST.
 2. **Route and parse.** The hand-written router matches method and path: unknown paths yield 404, and a known path with the wrong method yields 405 with an `Allow` header. The body is then decoded as UTF-8 and parsed with `json.loads`; malformed JSON or a non-object top level yields 400.
 3. **Validate shape.** `features.py` checks required keys, types, and ranges. Missing keys, wrong types, and unparseable values yield 400 listing the offending fields; unknown keys are ignored and logged.
 4. **Validate semantics.** Cross-field rules run next: non-positive income or `loan_amount`, negative ratios, `loan_term_months` outside the supported set. Violations yield 422.
@@ -189,11 +189,13 @@ Every error response uses the same envelope and sets `Content-Type: application/
 | 400 Bad Request | `bad_request` | Body is not valid UTF-8, not valid JSON, not a JSON object, or has missing or wrongly typed fields. |
 | 404 Not Found | `not_found` | No route matches the path, or `/v1/applications/<id>` references an unknown id. |
 | 405 Method Not Allowed | `method_not_allowed` | The path exists but the method is unsupported; the response includes an `Allow` header. |
-| 413 Payload Too Large | `payload_too_large` | `Content-Length` exceeds `MAX_BODY_BYTES`; the body is not read. |
+| 413 Payload Too Large | `payload_too_large` | `Content-Length` exceeds `MAX_BODY_BYTES`. The body is not buffered; the remainder is drained under a bound and the connection is closed. |
 | 422 Unprocessable Entity | `unprocessable_entity` | Body is well formed and well typed but semantically invalid (negative income, `loan_amount <= 0`, contradictory ratios). |
 | 500 Internal Server Error | `internal_error` | Unhandled exception, unloadable or corrupt model artifact, or database failure. Details are logged server-side; the client gets a generic message plus `request_id`. |
 
 Validation failures (400 and 422) are also appended to `audit_events` with `event_type = 'validation_error'`, because rejected input is analytically interesting. Error responses never include stack traces, filesystem paths, or SQL.
+
+**Early refusals close the connection.** Every path that refuses a request before its body has been read (413 for an oversized body, 400 for an unusable `Content-Length`, 411 for chunked framing) sends `Connection: close`. Closing a socket that still holds unread data makes the OS send RST instead of FIN, and an RST can make the peer *discard the response that was just written*: an honest client that sends a slightly oversized body would then see `ConnectionAbortedError` / `WinError 10053` instead of its 413, and on a kept-alive connection the unread body would be parsed as the next request line. Before closing, the server therefore discards what the client already sent — bounded by `DRAIN_LIMIT_BYTES` and a short socket timeout, since the declared length is attacker-controlled and must not become a way to make a worker read forever.
 
 ## 8. Observability
 

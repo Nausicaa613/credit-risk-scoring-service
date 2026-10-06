@@ -291,7 +291,7 @@ make data && make train
 | 404 | `not_found` | 路径或申请 ID 不存在 |
 | 405 | `method_not_allowed` | 路径存在但不支持该方法（带 `Allow` 头） |
 | 411 | `length_required` | 使用了 chunked 传输 |
-| 413 | `payload_too_large` | 请求体超过上限 |
+| 413 | `payload_too_large` | 请求体超过上限（不缓冲；读尽后关闭连接） |
 | 422 | `unprocessable_entity` | JSON 合法但语义不可行 |
 | 503 | `model_unavailable` | 模型未加载（先执行 `make train`） |
 

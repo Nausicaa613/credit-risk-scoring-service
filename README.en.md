@@ -339,7 +339,7 @@ payload in one iteration:
 | 404 | `not_found` | Unknown path or application id. |
 | 405 | `method_not_allowed` | Path exists but not for this method; an `Allow` header is sent. |
 | 411 | `length_required` | Chunked transfer encoding was used. |
-| 413 | `payload_too_large` | Body exceeded `RISKSCORE_MAX_BODY_BYTES`. |
+| 413 | `payload_too_large` | Body exceeded `RISKSCORE_MAX_BODY_BYTES`; it is not buffered and the connection is closed. |
 | 422 | `unprocessable_entity` | Well-formed JSON that is semantically impossible. |
 | 503 | `model_unavailable` | No model loaded; run `make train` first. |
 

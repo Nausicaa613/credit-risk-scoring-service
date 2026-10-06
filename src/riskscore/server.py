@@ -36,6 +36,13 @@ logger = logging.getLogger("riskscore.server")
 SERVER_NAME = "credit-risk-scoring-service"
 READ_TIMEOUT_SECONDS = 30.0
 
+#: How much of a rejected request body is read and discarded before the
+#: connection is closed, and how long to wait for it. Both bounds matter: the
+#: declared length comes from the client, so draining must not let a client make
+#: the server read an unbounded amount or pin a worker thread indefinitely.
+DRAIN_LIMIT_BYTES = 1 << 20
+DRAIN_TIMEOUT_SECONDS = 0.5
+
 #: Response headers applied to every reply. ``X-Content-Type-Options`` and
 #: ``Cache-Control`` are the two that actually matter for a JSON API served
 #: without a reverse proxy in front of it.
@@ -47,11 +54,18 @@ BASE_HEADERS: Dict[str, str] = {
 }
 
 
-def _error_response(status: int, code: str, message: str, *, request_id: str = "") -> Response:
+def _error_response(
+    status: int,
+    code: str,
+    message: str,
+    *,
+    request_id: str = "",
+    headers: Optional[Dict[str, str]] = None,
+) -> Response:
     payload: Dict[str, Any] = {"error": {"code": code, "message": message, "details": {}}}
     if request_id:
         payload["request_id"] = request_id
-    return Response(status=status, payload=payload)
+    return Response(status=status, payload=payload, headers=dict(headers or {}))
 
 
 class RiskScoreRequestHandler(BaseHTTPRequestHandler):
@@ -103,11 +117,52 @@ class RiskScoreRequestHandler(BaseHTTPRequestHandler):
 
     # -- core --------------------------------------------------------------
 
+    def _discard_rejected_body(self, length: int) -> None:
+        """Read and throw away a request body that is about to be rejected.
+
+        Closing a socket that still holds unread data makes the OS send RST
+        instead of FIN, and an RST can make the peer discard the response that
+        was just written. So an honest client that sends a slightly oversized
+        body could be told the connection was reset instead of receiving the 413
+        it was owed. Draining first turns the close back into a clean FIN.
+
+        This is bounded in both bytes and time on purpose: ``length`` is chosen
+        by the client, so an unbounded drain would be a denial-of-service vector
+        and an unbounded wait would pin a worker thread.
+        """
+        if length <= 0:
+            return
+        previous_timeout = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(DRAIN_TIMEOUT_SECONDS)
+            remaining = min(length, DRAIN_LIMIT_BYTES)
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except (OSError, ValueError):
+            # A client that stalls or vanishes is exactly the case we were
+            # already handling by closing, so give up quietly and let the close
+            # do its job.
+            pass
+        finally:
+            try:
+                self.connection.settimeout(previous_timeout)
+            except OSError:
+                pass
+
     def _read_body(self) -> Tuple[bytes, Optional[Response]]:
         """Read the body, enforcing the size cap.
 
         Returns ``(body, early_response)``; when ``early_response`` is not
         ``None`` the caller must send it and stop.
+
+        Every early return refuses the request *before* its body has been read,
+        so each one also tells the client the connection is finished. Without
+        that, the unread body is still in the socket: the connection is either
+        reused with the body parsed as the next request line, or closed abruptly
+        with an RST that can destroy this response.
         """
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
@@ -116,20 +171,33 @@ class RiskScoreRequestHandler(BaseHTTPRequestHandler):
                     411,
                     "length_required",
                     "chunked requests are not supported; send Content-Length",
+                    headers={"Connection": "close"},
                 )
             return b"", None
 
         try:
             length = int(raw_length)
         except (TypeError, ValueError):
-            return b"", _error_response(400, "validation_error", "invalid Content-Length header")
+            return b"", _error_response(
+                400,
+                "validation_error",
+                "invalid Content-Length header",
+                headers={"Connection": "close"},
+            )
         if length < 0:
-            return b"", _error_response(400, "validation_error", "Content-Length must not be negative")
+            return b"", _error_response(
+                400,
+                "validation_error",
+                "Content-Length must not be negative",
+                headers={"Connection": "close"},
+            )
         if length > self.settings.max_body_bytes:
+            self._discard_rejected_body(length)
             return b"", _error_response(
                 413,
                 "payload_too_large",
                 f"request body exceeds {self.settings.max_body_bytes} bytes",
+                headers={"Connection": "close"},
             )
         if length == 0:
             return b"", None
