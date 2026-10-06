@@ -7,8 +7,10 @@ SQLite, and ships health checks, metrics and model-governance artifacts alongsid
 suite.
 
 ```text
-Python 3.9+ | License: MIT | Runtime dependencies: none | Tests: 242 unittest cases, all passing
+Python 3.9+ | License: MIT | Runtime dependencies: none | Tests: 244 unittest cases, all passing
 ```
+
+[![CI](https://github.com/Nausicaa613/credit-risk-scoring-service/actions/workflows/ci.yml/badge.svg)](https://github.com/Nausicaa613/credit-risk-scoring-service/actions/workflows/ci.yml)
 
 [中文 README](README.md) | [Design document](docs/DESIGN.md) | [Model card](MODEL_CARD.md) | [Contributing](CONTRIBUTING.md)
 
@@ -114,7 +116,7 @@ credit-risk-scoring-service/
 │   ├── smoke_check.py      # end-to-end check in a temp directory
 │   ├── bench.py            # timings for training and scoring
 │   └── diagnose.py         # score/band inspection helper
-├── tests/                  # unittest suite (242 cases)
+├── tests/                  # unittest suite (244 cases)
 ├── docs/DESIGN.md
 ├── MODEL_CARD.md
 ├── CONTRIBUTING.md
@@ -146,7 +148,7 @@ With GNU make:
 ```bash
 make data     # generate the synthetic dataset (fixed seed, reproducible)
 make train    # train, calibrate, select the threshold, write the reports
-make test     # 242 unit and integration tests
+make test     # 244 unit and integration tests
 make smoke    # end-to-end check in a temp directory
 make run      # serve on http://127.0.0.1:8080
 make bench    # performance benchmark
@@ -381,7 +383,7 @@ make test-quiet    # summary only
 make check         # compile check plus the end-to-end smoke check
 ```
 
-`python -m unittest discover -s tests -t . -v`: 242 tests, all passing, in about 16 seconds. The suite
+`python -m unittest discover -s tests -t . -v`: 244 tests, all passing, in about 16 seconds. The suite
 is standard-library `unittest` and covers field validation and aliases, transform correctness, AUC/KS
 ranking including ties, training convergence and determinism, exact additivity of contributions, score
 monotonicity, band edges and label consistency, SQLite transaction atomicity, the append-only audit

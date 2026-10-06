@@ -4,9 +4,10 @@
 
 [English README](README.en.md) ｜ [设计文档](docs/DESIGN.md) ｜ [模型卡](MODEL_CARD.md) ｜ [参与开发](CONTRIBUTING.md)
 
+![CI](https://github.com/Nausicaa613/credit-risk-scoring-service/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)
 ![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
-![Tests](https://img.shields.io/badge/tests-242%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-244%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
@@ -93,7 +94,7 @@ credit-risk-scoring-service/
 │   ├── smoke_check.py      # 临时目录中的端到端自检
 │   ├── bench.py            # 性能基准
 │   └── diagnose.py         # 分数/档位排查工具
-├── tests/                  # unittest 测试套件（242 个用例）
+├── tests/                  # unittest 测试套件（244 个用例）
 ├── docs/DESIGN.md  ·  MODEL_CARD.md  ·  CONTRIBUTING.md
 ├── Makefile  ·  run.ps1    # 等价的两套命令入口
 └── Dockerfile  ·  docker-compose.yml  ·  .github/workflows/ci.yml
@@ -113,7 +114,7 @@ cd credit-risk-scoring-service
 ```bash
 make data     # 生成合成数据（固定种子，结果可复现）
 make train    # 训练、校准、选阈值，产出模型与报告
-make test     # 242 个单元与集成测试
+make test     # 244 个单元与集成测试
 make smoke    # 端到端自检（临时目录，不污染工作区）
 make run      # 启动服务，默认 http://127.0.0.1:8080
 make bench    # 性能基准
@@ -317,7 +318,7 @@ make test-quiet    # 仅摘要
 make check         # 编译检查 + 端到端自检
 ```
 
-242 个用例，约 16 秒。测试用标准库 `unittest`，覆盖：字段校验与别名、变换正确性、AUC/KS 的排名与并列情形、训练收敛与确定性、贡献度精确可加、分数单调性、档位边界与标签一致性、SQLite 事务原子性、审计只追加语义、请求路由与全部错误码、以及**真实 socket** 上的 HTTP/1.1 keep-alive 分帧。
+244 个用例，约 16 秒。测试用标准库 `unittest`，覆盖：字段校验与别名、变换正确性、AUC/KS 的排名与并列情形、训练收敛与确定性、贡献度精确可加、分数单调性、档位边界与标签一致性、SQLite 事务原子性、审计只追加语义、请求路由与全部错误码、以及**真实 socket** 上的 HTTP/1.1 keep-alive 分帧。
 
 ## 设计取舍
 
