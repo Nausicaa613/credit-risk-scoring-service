@@ -138,6 +138,15 @@ jobs:
 
           grep -q '"credit_score"' /tmp/score.json
           echo "container scored an application successfully"
+
+          # The demo page is generated, not read from disk, so this catches a
+          # packaging mistake (module missing from the image) rather than a
+          # missing file. It also proves the HTML branch of the writer works
+          # through the real container stack.
+          curl -fsS -D /tmp/app.headers http://127.0.0.1:8080/app -o /tmp/app.html
+          grep -qi '^content-type: text/html' /tmp/app.headers
+          grep -q '<!doctype html>' /tmp/app.html
+          echo "container served the demo page successfully"
       - name: Container logs
         if: always()
         run: docker logs riskscore-ci

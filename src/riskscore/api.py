@@ -87,13 +87,23 @@ class RequestContext:
 
 @dataclass(frozen=True)
 class Response:
-    """One outbound response, ready to be written to a socket."""
+    """One outbound response, ready to be written to a socket.
+
+    ``payload`` is JSON-encoded on the way out. A response that is not JSON --
+    the demo page the HTTP transport serves at ``/app`` -- sets ``body`` and
+    ``content_type`` instead. Adding these two optional fields leaves every
+    existing JSON handler untouched.
+    """
 
     status: int
     payload: Any
     headers: Mapping[str, str] = field(default_factory=dict)
+    body: Optional[bytes] = None
+    content_type: Optional[str] = None
 
     def body_bytes(self) -> bytes:
+        if self.body is not None:
+            return self.body
         return json.dumps(self.payload, ensure_ascii=False, indent=2, sort_keys=False).encode(
             "utf-8"
         )

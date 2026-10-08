@@ -422,5 +422,56 @@ class ServerConstructionTests(unittest.TestCase):
             directory.cleanup()
 
 
+class WebAppRouteTests(ServerTestCase):
+    """The demo UI is served by the transport, not by the JSON API.
+
+    It is a presentation concern, so it deliberately does not appear in the
+    endpoint index at ``GET /`` and cannot be reached through the
+    transport-neutral service.
+    """
+
+    def test_get_app_returns_html(self) -> None:
+        status, headers, raw = self.http("GET", "/app")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "text/html; charset=utf-8")
+        self.assertIn(b"<!doctype html>", raw.lower())
+        self.assertIn("信用风险评分服务".encode("utf-8"), raw)
+
+    def test_exactly_one_content_type_header_is_sent(self) -> None:
+        # BASE_HEADERS carries the JSON content type; it has to be suppressed for
+        # this response rather than sent alongside the HTML one. Two Content-Type
+        # headers is a real interop bug, and `dict(headers)` would hide it.
+        request = urllib.request.Request(f"{self.base_url}/app")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            values = response.headers.get_all("Content-Type")
+        self.assertEqual(len(values), 1)
+
+    def test_trailing_slash_is_the_same_page(self) -> None:
+        self.assertEqual(self.http("GET", "/app")[2], self.http("GET", "/app/")[2])
+
+    def test_head_app_returns_headers_without_a_body(self) -> None:
+        status, headers, raw = self.http("HEAD", "/app")
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, b"")
+        self.assertGreater(int(headers["Content-Length"]), 0)
+
+    def test_other_methods_are_rejected_with_allow(self) -> None:
+        status, headers, _ = self.http("POST", "/app", body={})
+        self.assertEqual(status, 405)
+        self.assertEqual(headers.get("Allow"), "GET, HEAD")
+
+    def test_app_is_not_advertised_as_a_json_endpoint(self) -> None:
+        # Matched as a quoted JSON string: a bare "/app" would also match inside
+        # "/v1/applications/<id>".
+        _, _, raw = self.http("GET", "/")
+        self.assertNotIn(b'"/app"', raw)
+
+    def test_scoring_still_works_on_the_same_server(self) -> None:
+        # The new route must not disturb dispatch for everything else.
+        status, _, payload = self.json_response("POST", "/v1/score", body=valid_payload())
+        self.assertEqual(status, 201)
+        self.assertIn("credit_score", payload["result"])
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

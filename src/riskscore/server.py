@@ -10,6 +10,10 @@ asks about. The layer does five things and nothing else:
 4. write the JSON response with a small set of standard headers,
 5. log the exchange and record the response time.
 
+It additionally serves the demo UI at ``GET /app``. That page is a presentation
+concern, so it lives here rather than in the transport-neutral service, and it
+is deliberately not part of the JSON API contract.
+
 Run it with ``python -m riskscore.server`` or the ``make run`` target.
 """
 
@@ -30,6 +34,7 @@ from .api import RequestContext, Response, ScoringService, new_request_id
 from .config import Settings
 from .errors import PayloadTooLargeError, RiskScoreError, ValidationError
 from .storage import utc_now_iso
+from .webapp import render_page
 
 logger = logging.getLogger("riskscore.server")
 
@@ -215,6 +220,38 @@ class RiskScoreRequestHandler(BaseHTTPRequestHandler):
             self._write(early, method=method, request_id=request_id, started=started)
             return
 
+        # The demo UI is served straight from the transport: it is one static
+        # document, and keeping it out of the service means the JSON API stays
+        # transport-neutral. The page then talks to the public JSON API itself,
+        # so it cannot quietly diverge from the contract.
+        if path in ("/app", "/app/"):
+            if method not in ("GET", "HEAD"):
+                self._write(
+                    _error_response(
+                        405,
+                        "method_not_allowed",
+                        f"{method} is not allowed on /app",
+                        request_id=request_id,
+                        headers={"Allow": "GET, HEAD"},
+                    ),
+                    method=method,
+                    request_id=request_id,
+                    started=started,
+                )
+                return
+            self._write(
+                Response(
+                    200,
+                    None,
+                    body=render_page().encode("utf-8"),
+                    content_type="text/html; charset=utf-8",
+                ),
+                method=method,
+                request_id=request_id,
+                started=started,
+            )
+            return
+
         context = RequestContext(
             method=method,
             path=path,
@@ -248,7 +285,12 @@ class RiskScoreRequestHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(response.status)
             for name, value in BASE_HEADERS.items():
+                # A non-JSON response (the demo page) declares its own type.
+                if response.content_type is not None and name.lower() == "content-type":
+                    continue
                 self.send_header(name, value)
+            if response.content_type is not None:
+                self.send_header("Content-Type", response.content_type)
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))

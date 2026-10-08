@@ -27,7 +27,7 @@ The service is a single-process HTTP server that scores a credit application wit
         |
         v
   server.py      ThreadingHTTPServer + hand-written router   <-->  metrics.py
-        |                                                        (counters,
+        |          (also serves the demo page at GET /app)          (counters,
         v                                                         latency,
   api.py         parse, validate, orchestrate, shape response     /metrics)
         |
@@ -77,10 +77,11 @@ scripts/train_model.py      --> models/model.json  (WoE bins, coefficients, inte
 | `src/riskscore/audit.py` | Build and append audit records; enforce append-only access (no update or delete helper exists); serialize events for `/v1/audit`. |
 | `src/riskscore/metrics.py` | In-process counters and latency histograms, score and probability distributions, model-version gauge, and Prometheus-style text rendering for `/metrics`. |
 | `src/riskscore/api.py` | Route handler functions: parse and validate input, orchestrate domain modules, and build the response or error envelope. Contains no transport concerns. |
-| `src/riskscore/server.py` | `ThreadingHTTPServer` subclass, hand-written router, HTTP parsing limits, headers, wire serialization, graceful shutdown, and the module entry point. |
+| `src/riskscore/server.py` | `ThreadingHTTPServer` subclass, hand-written router, HTTP parsing limits, headers, wire serialization, graceful shutdown, and the module entry point. Also serves the demo page at `GET /app` (Section 10). |
+| `src/riskscore/webapp.py` | The demo page: a single self-contained HTML document whose form is generated from `features.NUMERIC_FIELDS` / `PURPOSE_CODES`. Presentation only; it holds no scoring logic and talks to the public JSON API. |
 | `scripts/generate_dataset.py` | Generate the synthetic dataset from a fixed seed with configurable N; write CSV plus a metadata sidecar (seed, N, generator version). |
 | `scripts/train_model.py` | Fit WoE bins on the train split, run batch gradient descent, compute metrics (AUC, KS, accuracy, precision, recall, F1, confusion matrix), and write the JSON artifact plus a metrics report. |
-| `tests/` | Unit and integration tests for features, model math, scorecard mapping, storage, the API contract, and the metrics registry. See Section 9. |
+| `tests/` | Unit and integration tests for features, model math, scorecard mapping, storage, the API contract, the metrics registry, and the demo page's consistency with the feature schema. See Section 9. |
 
 ## 5. Data model
 
@@ -221,6 +222,8 @@ Validation failures (400 and 422) are also appended to `audit_events` with `even
 | `tests/test_storage.py` | Schema creation idempotency across restarts, insert/read round-trip, index presence, append-only enforcement, and rollback leaving no partial application row. |
 | `tests/test_api.py` | The full HTTP contract against a live server on an ephemeral port: the happy path, every status in Section 7, the error envelope shape, `Allow` on 405, body-size rejection before buffering, `/healthz`, and `/v1/applications/<id>` including the unknown-id case. |
 | `tests/test_metrics.py` | Counter and histogram arithmetic, exposition rendering, label cardinality, latency recording, and that `/metrics` reflects traffic produced by earlier requests. |
+| `tests/test_webapp.py` | The demo page's consistency with the feature schema: an input per numeric field, label and step tables covering the schema exactly, every purpose code offered, a scorable prefill, no external resources, and a single self-contained document. The route over a real socket is covered in `test_server.py`. |
+| `tests/test_server.py` | The transport itself: status lines, headers, `Allow` on 405, the `/app` route returning exactly one `Content-Type`, body-size rejection draining before close, and HTTP/1.1 keep-alive framing over a raw socket. |
 
 Tests use only `unittest` and `http.client` and run under `make test`. Model tests build tiny in-memory artifacts rather than depending on a trained file, so the suite does not require `make train` to have run first.
 
@@ -244,6 +247,8 @@ Tests use only `unittest` and `http.client` and run under `make test`. Model tes
 | JSON model artifact | `pickle`, joblib, ONNX | JSON is readable, diffable in git, language-agnostic, and safe to load from an untrusted path. `pickle` is smaller and faster but executes arbitrary code on load and is opaque in review. Costs a larger file and explicit serialization code. |
 | Hand-written router | A framework router | A literal route table is a few dozen lines with no hidden behavior, letting the Section 7 error contract be enforced in one place. Costs manual `Allow` headers, manual 404/405, and no automatic path-parameter binding. |
 | Synthetic data | German Credit, Lending Club, or another public dataset | Synthetic data is redistributable without licence questions, contains no personal data, and is exactly reproducible from a seed, which a portfolio artifact needs. Costs real-world signal: metrics measure recovery of the generator, and no fairness analysis is possible. A public dataset would add licence, privacy, and preprocessing burdens plus its own fairness limits. |
+| Demo page served by the transport, not the service | A route on `api.py`, or a separate front-end project | `api.py` stays transport-neutral, so no transport can be handed an HTML body it does not understand; and a separate project would need its own build chain, which contradicts the zero-dependency, single-artifact goal. The page then calls the public JSON API exactly as any client would, so it cannot quietly diverge from the contract. Costs a second rendering path in `server.py` and a non-JSON branch in `_write`. |
+| Page generated from the feature schema | A hand-written form | A hand-written form silently rots the first time a feature is added. Generating the inputs and asserting the label and step tables against `NUMERIC_FIELDS` turns that drift into a red test. Costs a small templating step at import time. |
 
 ## 12. Extension points
 
@@ -255,7 +260,7 @@ Tests use only `unittest` and `http.client` and run under `make test`. Model tes
 
 ## 13. Milestones
 
-**v0.1 (current).** Synthetic generator with a fixed seed; from-scratch logistic training with WoE features and a JSON artifact; `POST /v1/score` with contributions, reason codes, bands, and a configurable threshold; SQLite persistence with append-only audit; `/v1/applications/<id>` and `/v1/audit`; `/healthz` and `/metrics`; Makefile targets `data`, `train`, `run`, `test`, `bench`; GitHub Actions CI; Dockerfile and `docker-compose.yml`; README in Chinese and English. No authentication.
+**v0.1 (current).** Synthetic generator with a fixed seed; from-scratch logistic training with WoE features and a JSON artifact; `POST /v1/score` with contributions, reason codes, bands, and a configurable threshold; SQLite persistence with append-only audit; `/v1/applications/<id>` and `/v1/audit`; `/healthz` and `/metrics`; a self-contained demo page at `GET /app`; Makefile targets `data`, `train`, `run`, `test`, `bench`; GitHub Actions CI; Dockerfile and `docker-compose.yml`; README in Chinese and English. No authentication.
 
 **v0.2 (validation and operations).** Slice reporting by band, income decile, and loan purpose emitted by the training script and written into `MODEL_CARD.md`; calibration curve and reliability table; PSI drift check against a reference score distribution; structured JSON logging with a request correlator; optional API-key authentication and per-key rate limiting; an audit export command that copies rows out without mutating them.
 

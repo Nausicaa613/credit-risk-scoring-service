@@ -14,9 +14,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
+from dataclasses import replace
 from typing import Any, Dict
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +34,8 @@ from riskscore.api import RequestContext, ScoringService  # noqa: E402
 from riskscore.config import Settings  # noqa: E402
 from riskscore.features import FEATURE_NAMES, build_features, normalise_payload  # noqa: E402
 from riskscore.model import TrainingConfig, train_scorecard  # noqa: E402
+from riskscore.server import build_server  # noqa: E402
+from riskscore.webapp import SAMPLE_APPLICATION  # noqa: E402
 
 GOOD_APPLICATION: Dict[str, Any] = {
     "age": 42,
@@ -73,14 +79,14 @@ def main() -> int:
         model_path = os.path.join(workdir, "model.json")
         db_path = os.path.join(workdir, "riskscore.db")
 
-        print("[1/6] generating synthetic dataset")
+        print("[1/7] generating synthetic dataset")
         dataset = generate_dataset(1500, seed=20260101)
         write_jsonl(dataset, data_path)
         default_rate = sum(row["defaulted"] for row in dataset) / len(dataset)
         check(os.path.exists(data_path), f"dataset written to {data_path}")
         check(0.10 <= default_rate <= 0.28, f"default rate is plausible ({default_rate:.4f})")
 
-        print("[2/6] building the feature matrix")
+        print("[2/7] building the feature matrix")
         rows = []
         labels = []
         for row in dataset:
@@ -90,7 +96,7 @@ def main() -> int:
         check(len(rows[0]) == len(FEATURE_NAMES), f"feature width is {len(FEATURE_NAMES)}")
         check(len(set(labels)) == 2, "both classes are present")
 
-        print("[3/6] training the scorecard")
+        print("[3/7] training the scorecard")
         started = time.perf_counter()
         model, report = train_scorecard(
             rows[:1200],
@@ -107,7 +113,7 @@ def main() -> int:
         model.save(model_path)
         check(os.path.exists(model_path), "model artifact written")
 
-        print("[4/6] scoring two contrasting applicants")
+        print("[4/7] scoring two contrasting applicants")
         settings = Settings(db_path=db_path, model_path=model_path, decision_threshold=0.35)
         service = ScoringService(settings, model=model)
 
@@ -152,7 +158,7 @@ def main() -> int:
         )
         check(risky_result["decision"] == "decline", "the weak profile is declined")
 
-        print("[5/6] checking explainability")
+        print("[5/7] checking explainability")
         contributions = risky_result["contributions"]
         log_odds = sum(item["contribution"] for item in contributions) + risky_result["intercept"]
         # The JSON response rounds contributions to 6 decimals, so 18 features can
@@ -168,7 +174,7 @@ def main() -> int:
             "at least one reason code explains the decline",
         )
 
-        print("[6/6] checking persistence, audit trail and read endpoints")
+        print("[6/7] checking persistence, audit trail and read endpoints")
         application_id = risky_result["application_id"]
         fetched = service.handle(
             RequestContext(
@@ -223,6 +229,51 @@ def main() -> int:
             "problems" in invalid.payload["error"]["details"],
             "the validation error lists every problem it found",
         )
+
+        print("[7/7] checking the demo UI over a real socket")
+        # Port 0 lets the OS pick a free port, so the check never races another
+        # process for a probed one; the bound port is read back from the socket.
+        server = build_server(service, replace(settings, port=0))
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+        thread.daemon = True
+        thread.start()
+        try:
+            port = server.server_address[1]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/app", timeout=10) as page:
+                body = page.read().decode("utf-8")
+                check(page.status == 200, "GET /app returns 200")
+                check(
+                    page.headers.get_content_type() == "text/html",
+                    "the demo page is served as HTML",
+                )
+            check("<!doctype html>" in body.lower(), "the demo page is a full HTML document")
+            check("/v1/score" in body, "the page drives the public scoring endpoint")
+            check(
+                all(f'name="{field}"' in body for field in ("age", "purpose")),
+                "the page renders the application form",
+            )
+            external = re.findall(r'(?:src|href)="(https?://[^"]*)"', body)
+            check(external == [], "the page loads no external resources")
+
+            # The prefilled sample is the first thing a reviewer will submit, so
+            # the page's own defaults have to survive the real API.
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/score",
+                data=json.dumps(SAMPLE_APPLICATION).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as scored:
+                scored_body = json.loads(scored.read().decode("utf-8"))
+                check(scored.status == 201, "the prefilled sample scores over HTTP")
+            check(
+                300 <= scored_body["result"]["credit_score"] <= 850,
+                "the sample returns a score inside the published range",
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     print()
     print("smoke check passed: generate -> train -> score -> persist -> audit")

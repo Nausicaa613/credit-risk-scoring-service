@@ -7,7 +7,7 @@
 ![CI](https://github.com/Nausicaa613/credit-risk-scoring-service/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)
 ![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
-![Tests](https://img.shields.io/badge/tests-244%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-259%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
@@ -37,6 +37,7 @@ logit(PD) = 截距 + Σ (权重_i × 特征_i)
 - **可观测**：`/healthz` 做存活与就绪判定，`/metrics` 输出计数器、延迟直方图与分数分布。
 - **零依赖**：运行时只用标准库。CI 会解析 `src/` 的 AST，发现任何第三方导入就失败。
 - **自带数据生成器**：固定种子，可复现；用二分法求解截距，使真实 PD 均值命中指定的基准违约率。
+- **自带演示页面**：`GET /app` 提供一个单页前端（原生 HTML/JS，无框架、无 CDN、无构建步骤），覆盖「模型接入 → 推理服务 → 用户交互」的完整链路；表单由特征 schema **生成**，schema 与页面不一致会让测试失败。
 
 ## 架构
 
@@ -87,14 +88,15 @@ credit-risk-scoring-service/
 │   ├── audit.py            # 只追加审计
 │   ├── metrics.py          # 计数器、延迟直方图
 │   ├── api.py              # 与传输层无关的路由
-│   └── server.py           # http.server 传输层
+│   ├── server.py           # http.server 传输层（含 GET /app 路由）
+│   └── webapp.py           # 演示页：表单由特征 schema 生成
 ├── scripts/
 │   ├── generate_dataset.py # 合成数据生成器（固定种子）
 │   ├── train_model.py      # 训练 → 校准 → 选阈值 → 出报告
 │   ├── smoke_check.py      # 临时目录中的端到端自检
 │   ├── bench.py            # 性能基准
 │   └── diagnose.py         # 分数/档位排查工具
-├── tests/                  # unittest 测试套件（244 个用例）
+├── tests/                  # unittest 测试套件（259 个用例）
 ├── docs/DESIGN.md  ·  MODEL_CARD.md  ·  CONTRIBUTING.md
 ├── Makefile  ·  run.ps1    # 等价的两套命令入口
 └── Dockerfile  ·  docker-compose.yml  ·  .github/workflows/ci.yml
@@ -114,11 +116,13 @@ cd credit-risk-scoring-service
 ```bash
 make data     # 生成合成数据（固定种子，结果可复现）
 make train    # 训练、校准、选阈值，产出模型与报告
-make test     # 244 个单元与集成测试
+make test     # 259 个单元与集成测试
 make smoke    # 端到端自检（临时目录，不污染工作区）
 make run      # 启动服务，默认 http://127.0.0.1:8080
 make bench    # 性能基准
 ```
+
+启动后打开 **<http://127.0.0.1:8080/app>** 就是演示页面：填表 → 打分，直接看到分数、档位、决策、每个特征的贡献值与原因码。页面只调用公开的 JSON 接口，所以它同时是接口契约的活文档。
 
 ### Windows 上没有 make
 
@@ -255,6 +259,7 @@ make data && make train
 | `GET` | `/healthz` | 200 健康 / 503 降级（含模型与数据库状态） |
 | `GET` | `/metrics` | 进程内指标（可配置关闭） |
 | `GET` | `/` 或 `/v1` | 服务索引与端点清单 |
+| `GET` | `/app` | **演示页面**（浏览器 UI）。由传输层提供，**不属于 JSON 契约**，因此不出现在 `/` 的端点清单里 |
 
 ### 请求字段
 
@@ -318,7 +323,7 @@ make test-quiet    # 仅摘要
 make check         # 编译检查 + 端到端自检
 ```
 
-244 个用例，约 16 秒。测试用标准库 `unittest`，覆盖：字段校验与别名、变换正确性、AUC/KS 的排名与并列情形、训练收敛与确定性、贡献度精确可加、分数单调性、档位边界与标签一致性、SQLite 事务原子性、审计只追加语义、请求路由与全部错误码、以及**真实 socket** 上的 HTTP/1.1 keep-alive 分帧。
+259 个用例，约 16 秒。测试用标准库 `unittest`，覆盖：字段校验与别名、变换正确性、AUC/KS 的排名与并列情形、训练收敛与确定性、贡献度精确可加、分数单调性、档位边界与标签一致性、SQLite 事务原子性、审计只追加语义、请求路由与全部错误码、**真实 socket** 上的 HTTP/1.1 keep-alive 分帧、以及**演示页与特征 schema 的一致性**（表单字段、标签、下拉项、外加资源）。
 
 ## 设计取舍
 

@@ -7,7 +7,7 @@ SQLite, and ships health checks, metrics and model-governance artifacts alongsid
 suite.
 
 ```text
-Python 3.9+ | License: MIT | Runtime dependencies: none | Tests: 244 unittest cases, all passing
+Python 3.9+ | License: MIT | Runtime dependencies: none | Tests: 259 unittest cases, all passing
 ```
 
 [![CI](https://github.com/Nausicaa613/credit-risk-scoring-service/actions/workflows/ci.yml/badge.svg)](https://github.com/Nausicaa613/credit-risk-scoring-service/actions/workflows/ci.yml)
@@ -58,6 +58,9 @@ model, which is why the artifact is plain JSON — diffable and reviewable — r
   appears.
 - **Reproducible synthetic data.** A fixed-seed generator that solves for its intercept by bisection so
   the mean true probability matches a requested base rate.
+- **A built-in demo page.** `GET /app` serves a single-page front end (vanilla HTML/JS: no framework, no
+  CDN, no build step) covering the whole chain from model to user interface. The form is *generated*
+  from the feature schema, and the tests fail if the schema and the page disagree.
 
 ## Architecture
 
@@ -109,14 +112,15 @@ credit-risk-scoring-service/
 │   ├── audit.py            # append-only audit trail
 │   ├── metrics.py          # counters, latency histogram, score summary
 │   ├── api.py              # transport-neutral router and request handling
-│   └── server.py           # http.server transport (ThreadingHTTPServer)
+│   ├── server.py           # http.server transport (ThreadingHTTPServer) + the /app route
+│   └── webapp.py           # demo page; the form is generated from the feature schema
 ├── scripts/
 │   ├── generate_dataset.py # synthetic dataset generator (fixed seed)
 │   ├── train_model.py      # train, calibrate, select threshold, report
 │   ├── smoke_check.py      # end-to-end check in a temp directory
 │   ├── bench.py            # timings for training and scoring
 │   └── diagnose.py         # score/band inspection helper
-├── tests/                  # unittest suite (244 cases)
+├── tests/                  # unittest suite (259 cases)
 ├── docs/DESIGN.md
 ├── MODEL_CARD.md
 ├── CONTRIBUTING.md
@@ -148,11 +152,15 @@ With GNU make:
 ```bash
 make data     # generate the synthetic dataset (fixed seed, reproducible)
 make train    # train, calibrate, select the threshold, write the reports
-make test     # 244 unit and integration tests
+make test     # 259 unit and integration tests
 make smoke    # end-to-end check in a temp directory
 make run      # serve on http://127.0.0.1:8080
 make bench    # performance benchmark
 ```
+
+Once it is running, open **<http://127.0.0.1:8080/app>** for the demo page: fill in the form, submit, and
+read the score, band, decision, per-feature contributions and reason codes. The page calls only the
+public JSON endpoints, so it doubles as living documentation of the contract.
 
 On Windows without make, `run.ps1` provides identical targets and defaults:
 
@@ -296,6 +304,7 @@ probability cut-offs, band A is also nearly empty on this dataset.
 | `GET` | `/healthz` | `200` healthy, `503` degraded. Includes model and database state. |
 | `GET` | `/metrics` | In-process metrics. `404` when `RISKSCORE_METRICS_ENABLED=0`. |
 | `GET` | `/` or `/v1` | Service index and endpoint list. |
+| `GET` | `/app` | **Demo page** (browser UI). Served by the transport, **not part of the JSON contract**, so it is absent from the endpoint list at `/`. |
 
 ### Request fields
 
@@ -383,11 +392,12 @@ make test-quiet    # summary only
 make check         # compile check plus the end-to-end smoke check
 ```
 
-`python -m unittest discover -s tests -t . -v`: 244 tests, all passing, in about 16 seconds. The suite
+`python -m unittest discover -s tests -t . -v`: 259 tests, all passing, in about 16 seconds. The suite
 is standard-library `unittest` and covers field validation and aliases, transform correctness, AUC/KS
 ranking including ties, training convergence and determinism, exact additivity of contributions, score
 monotonicity, band edges and label consistency, SQLite transaction atomicity, the append-only audit
-guarantee, routing and every error code, and HTTP/1.1 keep-alive framing **over a real socket**.
+guarantee, routing and every error code, HTTP/1.1 keep-alive framing **over a real socket**, and the
+demo page's consistency with the feature schema.
 
 ## Design decisions and tradeoffs
 
